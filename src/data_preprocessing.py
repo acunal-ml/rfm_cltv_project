@@ -3,7 +3,7 @@ import datetime as dt
 
 
 def check_outliers_thresholds(dataframe: pd.DataFrame, col_name: str, q1=0.25, q3=0.75):
-    """Aykırı değerler için alt ve üst limitleri belirler."""
+
     q1_val = dataframe[col_name].quantile(q1)
     q3_val = dataframe[col_name].quantile(q3)
     iqr = q3_val - q1_val
@@ -13,7 +13,7 @@ def check_outliers_thresholds(dataframe: pd.DataFrame, col_name: str, q1=0.25, q
 
 
 def replace_outliers(dataframe: pd.DataFrame, col_name: str):
-    """Aykırı değerleri eşik değerlerle baskılar."""
+
     low_limit, up_limit = check_outliers_thresholds(dataframe, col_name)
     dataframe.loc[(dataframe[col_name] < low_limit), col_name] = low_limit
     dataframe.loc[(dataframe[col_name] > up_limit), col_name] = up_limit
@@ -21,15 +21,14 @@ def replace_outliers(dataframe: pd.DataFrame, col_name: str):
 
 
 def calculate_rfm(df: pd.DataFrame, customer_id_col: str, date_col: str, freq_cols: list, monetary_cols: list) -> pd.DataFrame:
-    """Ham veriden RFM tablosunu ve segmentleri oluşturur."""
-    # Veri hazırlığı
+
     df['Total_Transaction'] = df[freq_cols].sum(axis=1)
     df['Total_Price'] = df[monetary_cols].sum(axis=1)
     df[date_col] = pd.to_datetime(df[date_col])
 
     analysis_date = df[date_col].max() + dt.timedelta(days=2)
 
-    # RFM Metrikleri
+    # RFM
     rfm = df.groupby(customer_id_col).agg({
         date_col: lambda date: (analysis_date - date.max()).days,
         'Total_Transaction': lambda num: num.sum(),
