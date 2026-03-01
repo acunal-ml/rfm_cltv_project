@@ -1,14 +1,16 @@
 import streamlit as st
 import pandas as pd
 import datetime as dt
-
+import mlflow
+from lifetimes import BetaGeoFitter, GammaGammaFitter
 from src.data_preprocessing import calculate_rfm
 from src.agent import get_pandas_agent, ask_agent
 
 
-def calculate_cltv(df, customer_id, first_date_col, last_date_col, freq_cols, mon_cols):
+def calculate_cltv(df, customer_id, first_date_col, last_date_col, freq_cols, mon_cols, cltv_month=6):
     temp_df = df.copy()
 
+    # Tarih formatlama
     temp_df[first_date_col] = pd.to_datetime(temp_df[first_date_col], errors='coerce')
     temp_df[last_date_col] = pd.to_datetime(temp_df[last_date_col], errors='coerce')
 
@@ -21,16 +23,54 @@ def calculate_cltv(df, customer_id, first_date_col, last_date_col, freq_cols, mo
     cltv_df = pd.DataFrame(index=grouped.groups.keys())
     cltv_df.index.name = 'Customer_ID'
 
-    cltv_df['Recency'] = (max_last_date - min_first_date).dt.days
+    cltv_df['recency'] = (max_last_date - min_first_date).dt.days
     cltv_df['T'] = (analysis_date - min_first_date).dt.days
-    cltv_df['Frequency'] = grouped[freq_cols].sum().sum(axis=1)
-    cltv_df['Monetary'] = grouped[mon_cols].sum().sum(axis=1)
+    cltv_df['frequency'] = grouped[freq_cols].sum().sum(axis=1)
+
+    total_monetary = grouped[mon_cols].sum().sum(axis=1)
+    cltv_df['monetary_value'] = total_monetary / cltv_df['frequency'].replace(0, 1)
 
     cltv_df = cltv_df.reset_index()
 
-    cltv_df['T_safe'] = cltv_df['T'].replace(0, 1)
-    cltv_df['CLTV_Score'] = (cltv_df['Frequency'] * cltv_df['Monetary']) / cltv_df['T_safe']
-    cltv_df = cltv_df.drop(columns=['T_safe'])
+    fit_df = cltv_df[(cltv_df['frequency'] > 0) & (cltv_df['monetary_value'] > 0)].copy()
+
+    mlflow.set_experiment("Corporate_CRM_CLTV_Prediction")
+
+    with mlflow.start_run(run_name=f"CLTV_{cltv_month}_Months_Run"):
+        bgf_penalizer = 0.001
+        ggf_penalizer = 0.01
+
+        bgf = BetaGeoFitter(penalizer_coef=bgf_penalizer)
+        bgf.fit(fit_df['frequency'], fit_df['recency'], fit_df['T'])
+
+        ggf = GammaGammaFitter(penalizer_coef=ggf_penalizer)
+        ggf.fit(fit_df['frequency'], fit_df['monetary_value'])
+
+        cltv_predictions = ggf.customer_lifetime_value(
+            bgf,
+            fit_df['frequency'],
+            fit_df['recency'],
+            fit_df['T'],
+            fit_df['monetary_value'],
+            time=cltv_month,
+            freq="D",
+            discount_rate=0.01
+        )
+
+        fit_df['CLTV_Score'] = cltv_predictions
+
+        mlflow.log_param("bgf_penalizer_coef", bgf_penalizer)
+        mlflow.log_param("ggf_penalizer_coef", ggf_penalizer)
+        mlflow.log_param("prediction_months", cltv_month)
+        mlflow.log_param("trained_customer_count", len(fit_df))
+
+        mean_cltv = fit_df['CLTV_Score'].mean()
+        mlflow.log_metric("mean_cltv_score", mean_cltv)
+
+    # ==========================================
+
+    cltv_df = pd.merge(cltv_df, fit_df[['Customer_ID', 'CLTV_Score']], on='Customer_ID', how='left')
+    cltv_df['CLTV_Score'] = cltv_df['CLTV_Score'].fillna(0)
 
     cltv_df['CLTV_Segment'] = pd.qcut(cltv_df['CLTV_Score'].rank(method='first'), 4, labels=['D', 'C', 'B', 'A'])
 

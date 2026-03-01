@@ -10,24 +10,26 @@ def get_pandas_agent(df: pd.DataFrame):
 
 def ask_agent(llm, query: str, df: pd.DataFrame = None) -> str:
     if df is None:
-        return "⚠️ Error: The dataset was not passed to the agent. Please ensure 'aktif_veri' is passed as the 3rd parameter to ask_agent in app.py."
+        return "⚠️ Error: The dataset was not passed to the agent."
 
     try:
-        seg_col = 'segment' if 'segment' in df.columns else 'Segment' if 'Segment' in df.columns else None
-
         context = f"Total rows in dataset: {df.shape[0]}\n\n"
         numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
 
-        if seg_col and numeric_cols:
-            segment_counts = df[seg_col].value_counts()
-            grouped_sum = df.groupby(seg_col)[numeric_cols].sum().round(2)
-            grouped_mean = df.groupby(seg_col)[numeric_cols].mean().round(2)
+        if 'segment' in df.columns:
+            context += f"--- RFM SEGMENT COUNTS ---\n{df['segment'].value_counts().to_string()}\n\n"
 
-            context += f"--- SEGMENT COUNTS (Number of Customers) ---\n{segment_counts.to_string()}\n\n"
-            context += f"--- SUMS BY SEGMENT (Total Values) ---\n{grouped_sum.to_string()}\n\n"
-            context += f"--- MEANS BY SEGMENT (Average Values) ---\n{grouped_mean.to_string()}\n\n"
-        else:
-            context += f"--- DATA SUMMARY ---\n{df.describe().round(2).to_string()}\n\n"
+        # 2. CLTV Segment Özeti
+        if 'CLTV_Segment' in df.columns:
+            context += f"--- CLTV SEGMENT COUNTS ---\n{df['CLTV_Segment'].value_counts().to_string()}\n\n"
+
+        if 'segment' in df.columns and 'CLTV_Segment' in df.columns:
+            cross_tab = pd.crosstab(df['segment'], df['CLTV_Segment'])
+            context += f"--- CUSTOMER DISTRIBUTION (RFM vs CLTV Segments) ---\n{cross_tab.to_string()}\n\n"
+
+        if 'segment' in df.columns and numeric_cols:
+            grouped_mean = df.groupby('segment')[numeric_cols].mean().round(2)
+            context += f"--- AVERAGE VALUES BY RFM SEGMENT ---\n{grouped_mean.to_string()}\n\n"
 
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a Senior Data Scientist and CRM Consultant.
@@ -35,8 +37,8 @@ def ask_agent(llm, query: str, df: pd.DataFrame = None) -> str:
             Answer the user's questions STRICTLY based on the provided context data.
             DO NOT try to write python code. Analyze the tables and provide strategic, clear answers.
             IMPORTANT RULES: 
-            1. Respond in the language the user speaks to you (if they ask in English, use English; if in Turkish, use Turkish).
-            2. Make your answers professional, actionable, and structured (use bullet points if necessary)."""),
+            1. Respond in the language the user speaks to you.
+            2. Make your answers professional, actionable, and structured."""),
             ("user", "Context Data:\n{context}\n\nQuestion: {question}")
         ])
 
